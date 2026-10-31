@@ -99,9 +99,20 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium firefox webkit
 
-      # Chromium · Firefox · WebKit 으로 데스크톱 · 모바일 화면과 키보드 조작(본문 바로가기 · 검색창 초점 가두기 · Esc 복귀)을 시험한다
-      - name: 화면 · 키보드 시험 (세 브라우저)
+      # Chromium · Firefox · WebKit 으로 데스크톱 · 모바일 화면과 키보드 조작(본문 바로가기 · 검색창 초점 가두기 · Esc 복귀)을 시험한다.
+      # 세 엔진을 동시에 돌리면 러너 자원이 모자라 Firefox 가 시간 초과로 떨어진다 — 엔진마다 따로 돌린다
+      - name: 화면 · 키보드 시험 (Chromium)
         run: npm --prefix web run qa
+        env:
+          QA_ENGINES: chromium
+      - name: 화면 · 키보드 시험 (Firefox)
+        run: npm --prefix web run qa
+        env:
+          QA_ENGINES: firefox
+      - name: 화면 · 키보드 시험 (WebKit)
+        run: npm --prefix web run qa
+        env:
+          QA_ENGINES: webkit
 
       - name: Cloudflare Pages 배포
         if: github.event_name != 'pull_request'
