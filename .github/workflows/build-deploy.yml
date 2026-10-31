@@ -1,9 +1,13 @@
 # hskim.me 빌드·배포
 #
-# 트리거 세 가지
+# 트리거 네 가지
 #   push               — 사이트 코드가 바뀌었을 때
 #   repository_dispatch — Vault 저장소에서 알려줄 때 (노트가 추가·수정됐을 때)
 #   workflow_dispatch   — 수동 실행
+#   pull_request        — 빌드와 검사만 돌리고 배포하지 않는다
+#
+# 배포를 멈추는 검사 (하나라도 실패하면 배포 단계로 가지 않는다)
+#   콘텐츠 가드 · 유출 검증 → 빌드 후 주소 검사 → HTML 문법(W3C) → 세 브라우저 화면 · 키보드 시험
 #
 # 필요한 설정 (infra/README.md 참고)
 #   변수  VAULT_REPO            예) hskim/hskim-vault
@@ -19,10 +23,12 @@ on:
   repository_dispatch:
     types: [vault-updated]
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
-# 동시에 여러 배포가 겹치지 않게 한다. 나중 것만 살린다.
+# 동시에 여러 배포가 겹치지 않게 한다. 나중 것만 살린다. (PR 검사는 배포와 따로 돈다)
 concurrency:
-  group: deploy
+  group: ${{ github.event_name == 'pull_request' && format('qa-{0}', github.ref) || 'deploy' }}
   cancel-in-progress: true
 
 permissions:
@@ -66,15 +72,50 @@ jobs:
 
       # Nero 색인 (P8) — 바뀐 조각만 임베딩해 Vectorize 에 올린다. 토큰이 없으면 건너뛰고 배포는 계속한다
       - name: Nero 색인
+        if: github.event_name != 'pull_request'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           NERO_INDEX_TOKEN: ${{ secrets.NERO_INDEX_TOKEN }}
         run: node pipeline/src/nero-index.mjs
 
+      # postbuild 의 주소 검사(verify-routes)가 여기서 빌드를 중단시킨다.
       - name: 사이트 빌드
         run: npm --prefix web run build
 
+      # W3C 검사기와 브라우저 엔진은 한 번 받아 두고 다시 쓴다
+      - name: 검사 도구 캐시
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/hskim-qa
+            ~/.cache/ms-playwright
+          key: qa-tools-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+
+      # HTML 문법 — W3C Nu Html Checker 로 빌드 결과 전체. 오류가 있으면 멈춘다 (경고는 기록만)
+      - name: HTML 문법 검사 (W3C)
+        run: npm --prefix web run qa:html
+
+      - name: 브라우저 엔진 설치
+        working-directory: web
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      # Chromium · Firefox · WebKit 으로 데스크톱 · 모바일 화면과 키보드 조작(본문 바로가기 · 검색창 초점 가두기 · Esc 복귀)을 시험한다.
+      # 세 엔진을 동시에 돌리면 러너 자원이 모자라 Firefox 가 시간 초과로 떨어진다 — 엔진마다 따로 돌린다
+      - name: 화면 · 키보드 시험 (Chromium)
+        run: npm --prefix web run qa
+        env:
+          QA_ENGINES: chromium
+      - name: 화면 · 키보드 시험 (Firefox)
+        run: npm --prefix web run qa
+        env:
+          QA_ENGINES: firefox
+      - name: 화면 · 키보드 시험 (WebKit)
+        run: npm --prefix web run qa
+        env:
+          QA_ENGINES: webkit
+
       - name: Cloudflare Pages 배포
+        if: github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
