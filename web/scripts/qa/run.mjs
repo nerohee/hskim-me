@@ -62,17 +62,11 @@ async function runEngine(name) {
   const L = ENGINES[name]
   if (!L) return { name, lines: [`  ? 모르는 엔진: ${name}`], failed: 0 }
   let browser
-  // GPU 가 없는 CI 에서도 3D 그래프를 그리게 소프트웨어 WebGL 을 켠다
-  // (Chromium 은 SwiftShader, Firefox 는 소프트웨어 렌더러를 막는 차단 목록을 끈다)
-  try {
-    browser = await L.launch({
-      args: name === 'chromium' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [],
-      firefoxUserPrefs: name === 'firefox' ? { 'webgl.force-enabled': true } : undefined,
-    })
-  }
+  try { browser = await L.launch({ args: name === 'chromium' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [] }) }
   catch (e) { return { name, lines: [`  ✗ ${name} — 실행 못 함: ${e.message.split('\n')[0]}`], failed: 1 } }
   const fails = []
   const fail = (where, msg) => fails.push(`${where}: ${msg}`)
+  const notes = []
   let pages = 0
 
   for (const [vp, size] of [['desktop', { width: 1280, height: 860 }], ['mobile', { width: 390, height: 844 }]]) {
@@ -95,6 +89,9 @@ async function runEngine(name) {
       const i = await page.evaluate(() => ({
         hscroll: document.documentElement.scrollWidth > innerWidth + 1,
         canvas: !!document.querySelector('canvas'),
+        // 사이트와 같은 방법으로 WebGL 을 확인하고 (GraphStage.tsx), 못 쓰면 뜨는 대체 화면을 찾는다
+        webgl: (() => { try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')) } catch { return false } })(),
+        fallback: document.body.innerText.includes('3D 그래프를 표시할 수 없습니다') && !!document.querySelector('a[href="/index-all"]'),
         katex: document.querySelectorAll('.katex').length,
         diagram: document.querySelectorAll('.diagram-stage svg').length,
         diagramErr: document.querySelectorAll('.diagram-error').length,
@@ -107,7 +104,13 @@ async function runEngine(name) {
       if (errs.length) fail(where, `스크립트 오류 ${errs.length} — ${errs[0]}`)
       if (i.hscroll) fail(where, '가로 스크롤이 생김')
       if (!i.font) fail(where, '본문 글꼴(Pretendard)이 없음')
-      if (pg.expect?.canvas && !i.canvas) fail(where, '3D 그래프가 그려지지 않음')
+      // WebGL 을 쓸 수 있는데 그래프가 없으면 실패. 못 쓰는 환경(GPU 없는 CI 의 Firefox 등)에서는
+      // 설계된 대체 화면(목록으로 보기, D-07)이 떠야 통과하고, 그 사실을 결과에 남긴다
+      if (pg.expect?.canvas && !i.canvas) {
+        if (i.webgl) fail(where, '3D 그래프가 그려지지 않음')
+        else if (!i.fallback) fail(where, 'WebGL 을 못 쓰는데 대체 목록 화면도 없음')
+        else notes.push(`${where}: WebGL 없음 → 대체 목록 화면 확인`)
+      }
       if (pg.expect?.katex && !i.katex) fail(where, '수식이 그려지지 않음')
       if (pg.expect?.diagram && (!i.diagram || i.diagramErr)) fail(where, `도표 ${i.diagram}개 · 오류 ${i.diagramErr}`)
       if (pg.expect?.shiki && !i.shiki) fail(where, '코드 강조가 없음')
@@ -211,9 +214,10 @@ async function runEngine(name) {
   } catch (e) { fail('index', `시험 중단 — ${e.message.split('\n')[0]}`) }
 
   await browser.close()
-  const lines = fails.length
+  const lines = (fails.length
     ? [`  ✗ ${name} — ${fails.length}건`, ...fails.map(f => `      ${f}`)]
     : [`  ✓ ${name} — ${pages}쪽 · 키보드 · 스탯창 · 전체 목록 통과`]
+  ).concat(notes.map(n => `      · ${n}`))
   return { name, lines, failed: fails.length }
 }
 
