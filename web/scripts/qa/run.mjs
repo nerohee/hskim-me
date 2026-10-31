@@ -62,7 +62,14 @@ async function runEngine(name) {
   const L = ENGINES[name]
   if (!L) return { name, lines: [`  ? 모르는 엔진: ${name}`], failed: 0 }
   let browser
-  try { browser = await L.launch({ args: name === 'chromium' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [] }) }
+  // GPU 가 없는 CI 에서도 3D 그래프를 그리게 소프트웨어 WebGL 을 켠다
+  // (Chromium 은 SwiftShader, Firefox 는 소프트웨어 렌더러를 막는 차단 목록을 끈다)
+  try {
+    browser = await L.launch({
+      args: name === 'chromium' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [],
+      firefoxUserPrefs: name === 'firefox' ? { 'webgl.force-enabled': true } : undefined,
+    })
+  }
   catch (e) { return { name, lines: [`  ✗ ${name} — 실행 못 함: ${e.message.split('\n')[0]}`], failed: 1 } }
   const fails = []
   const fail = (where, msg) => fails.push(`${where}: ${msg}`)
